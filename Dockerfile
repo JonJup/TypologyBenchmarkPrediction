@@ -1,7 +1,8 @@
 FROM rocker/shiny:4.4.0
 
 # System dependencies for your R packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4 && \
+    apt-get update && apt-get install -y --no-install-recommends \
     libcurl4-openssl-dev \
     libssl-dev \
     libxml2-dev \
