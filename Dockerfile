@@ -1,19 +1,14 @@
 # PULSE benchmark app for CSC Rahti (OpenShift)
 #
-# Two build targets:
-#   app     (default) the app only; models are read from a volume mounted at MODEL_DIR
-#   bundle  the app plus the models in models/, one image layer per taxon
+# The app only: models are read from a volume mounted at MODEL_DIR (/srv/models).
+# This is the file Rahti builds from Git. Models never go into the Git repository.
 #
-# Rahti's internal registry accepts images of at most 5 GiB. The reduced models
-# (about 7.3 GB) push the bundle past that, so the bundle goes to an external
-# registry (ghcr.io) and the app target to Rahti. See build_push.sh.
-#
-# Build context (this folder):
-#   Dockerfile, .dockerignore, app.R
-#   models/   <taxon>__<metric>.rds and <taxon>__<metric>_intervals.rds (bundle only)
+# Dockerfile.bundle adds the models on top of this image. Rahti's internal registry
+# accepts images of at most 5 GiB and the reduced models are about 7.3 GB, so a
+# bundle goes to an external registry (ghcr.io). See build_push.sh.
 
 ARG R_VERSION=4.5.1
-FROM rocker/r-ver:${R_VERSION} AS app
+FROM rocker/r-ver:${R_VERSION}
 
 # Binary packages from the Posit Package Manager snapshot that rocker pins for this
 # R version, so package versions are reproducible. RANGER_VERSION can pin ranger to
@@ -47,14 +42,3 @@ USER 1001
 
 # Shiny directly, without Shiny Server (its run_as fails under arbitrary UIDs)
 CMD ["Rscript", "-e", "shiny::runApp('/srv/app', host = '0.0.0.0', port = as.integer(Sys.getenv('PORT', '3838')), launch.browser = FALSE)"]
-
-
-FROM app AS bundle
-
-# One layer per taxon: smaller layers upload and pull more reliably.
-COPY --chown=1001:0 models/diatoms__*       /srv/app/models/
-COPY --chown=1001:0 models/fish__*          /srv/app/models/
-COPY --chown=1001:0 models/invertebrates__* /srv/app/models/
-COPY --chown=1001:0 models/macrophytes__*   /srv/app/models/
-
-ENV MODEL_DIR=/srv/app/models
