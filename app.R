@@ -192,12 +192,11 @@ PREDICTOR_SPEC <- list(
                        min = 3, max = 10000, value = 100, step = 1,
                        help = "Number of sites in the typology."),
         min_distance = list(label = "Minimum distance (km)", group = "Spatial",
-                            min = 0, max = 10000, value = 1, step = 0.1,
-                            help = "Smallest pairwise distance between sites."),
+                            min = 0, max = 10000, value = 1, step = 0.1, scale = 1000,
+                            help = "Smallest pairwise distance between sites, in km (the model uses metres)."),
         median_distance = list(label = "Median distance (km)", group = "Spatial",
-                               min = 0, max = 10000, value = 100, step = 1,
-                               help = "Median pairwise distance between sites."),
-        
+                               min = 0, max = 10000, value = 100, step = 1, scale = 1000,
+                               help = "Median pairwise distance between sites, in km (the model uses metres)."),
         # Community (variation partitioning of the observed community)
         n_taxa_used = list(label = "Number of taxa", group = "Community", is_integer = TRUE,
                            min = 2, max = 5000, value = 50, step = 1,
@@ -214,16 +213,16 @@ PREDICTOR_SPEC <- list(
         
         # Taxonomic resolution
         species_rank = list(label = "Species rank (share)", group = "Taxonomic",
-                            min = 0, max = 1, value = 0.7, step = 0.01,
+                            min = 0, max = 1, value = 0.9, step = 0.01,
                             help = "Share of taxa identified to species."),
         genus_rank = list(label = "Genus rank (share)", group = "Taxonomic",
-                          min = 0, max = 1, value = 0.2, step = 0.01,
+                          min = 0, max = 1, value = 0.08, step = 0.01,
                           help = "Share of taxa identified to genus."),
         family_rank = list(label = "Family rank (share)", group = "Taxonomic",
-                           min = 0, max = 1, value = 0.08, step = 0.01,
+                           min = 0, max = 1, value = 0.015, step = 0.005,
                            help = "Share of taxa identified to family."),
         higher_rank = list(label = "Higher rank (share)", group = "Taxonomic",
-                           min = 0, max = 1, value = 0.02, step = 0.01,
+                           min = 0, max = 1, value = 0.005, step = 0.005,
                            help = "Share of taxa identified above family."),
         
         # Sampling dates
@@ -239,6 +238,13 @@ PREDICTOR_GROUPS <- unique(vapply(PREDICTOR_SPEC, `[[`, "", "group"))
 spec_label   <- function(v) vapply(v, function(x) PREDICTOR_SPEC[[x]]$label %||% x, "")
 spec_default <- function(v) vapply(v, function(x) PREDICTOR_SPEC[[x]]$value %||% 0, 0)
 is_int_var   <- function(v) vapply(v, function(x) isTRUE(PREDICTOR_SPEC[[x]]$is_integer), TRUE)
+
+# Units: inputs are entered in display units (spec $label); the model uses
+# display value * $scale (e.g. km entered, metres in the model).
+spec_scale <- function(v) vapply(v, function(x) PREDICTOR_SPEC[[x]]$scale %||% 1, 1)
+to_model   <- function(x, v) x * unname(spec_scale(v))
+to_display <- function(x, v) x / unname(spec_scale(v))
+
 
 # Constraints on imputed values. Specified values are never changed.
 #   equal : the group sums to `total`
@@ -537,7 +543,9 @@ outside_range <- function(bm, specified_vals) {
         x  <- as.numeric(unlist(specified_vals[v]))
         bad <- x < tr$min[v] | x > tr$max[v]
         if (!any(bad)) return(NULL)
-        data.table(var = v[bad], value = x[bad], min = tr$min[v][bad], max = tr$max[v][bad])
+        vb <- v[bad]
+        data.table(var = vb, value = to_display(x[bad], vb),
+                   min = to_display(tr$min[vb], vb), max = to_display(tr$max[vb], vb))
 }
 
 density_from_values <- function(v, from = min(v), to = max(v)) {
@@ -627,7 +635,7 @@ resolve_inputs <- function(bm, specified_vals, method = "conditional", k = 50, k
         if (length(imputed)) {
                 if (is.null(ref)) {
                         method_used <- "defaults"
-                        vals[imputed] <- spec_default(imputed)
+                        vals[imputed] <- to_model(spec_default(imputed), imputed)
                 } else if (method == "conditional" && length(specified)) {
                         key  <- paste(sort(specified), collapse = "|")
                         prep <- if (!is.null(knn_cache)) knn_cache[[key]] else NULL
@@ -682,7 +690,8 @@ imputation_analysis <- function(bm, inp, v_base, taus, obs = NULL, seed = 1L) {
         base_med   <- q7s(base_vs, 0.5)
         base_range <- q7s(base_vs, RANGE_PROBS)
         eff <- data.table(var = imputed, label = spec_label(imputed),
-                          value = as.numeric(unlist(base[1, imputed])), lo = rng[, 1], hi = rng[, 2],
+                          value = to_display(as.numeric(unlist(base[1, imputed])), imputed),
+                          lo = to_display(rng[, 1], imputed), hi = to_display(rng[, 2], imputed),
                           median_lo = med[seq(1, n_oat, 2)], median_hi = med[seq(2, n_oat, 2)])
         eff[, `:=`(d_lo = median_lo - base_med, d_hi = median_hi - base_med,
                    impact = abs(median_hi - median_lo))]
@@ -916,8 +925,8 @@ predict_batch_group <- function(bm, dfg, taus, method, k, progress = function(..
         knn_cache <- new.env(parent = emptyenv())
         rows <- vector("list", n); imputed <- character(n)
         for (i in seq_len(n)) {
-                sv  <- as.list(dfg[i, cols, drop = FALSE])
                 sv  <- sv[vapply(sv, function(z) is.numeric(z) && is.finite(z), TRUE)]
+                sv  <- Map(to_model, sv, names(sv))
                 inp <- resolve_inputs(bm, sv, method, k, knn_cache)
                 rows[[i]]  <- inp$row
                 imputed[i] <- paste(inp$imputed, collapse = ";")
@@ -2126,7 +2135,7 @@ server <- function(input, output, session) {
         observeEvent(input$reset, {
                 med <- benchmark()$training$medians
                 for (p in names(PREDICTOR_SPEC)) {
-                        val <- if (!is.null(med) && p %in% names(med)) med[[p]] else PREDICTOR_SPEC[[p]]$value
+                        val <- if (!is.null(med) && p %in% names(med)) to_display(med[[p]], p) else PREDICTOR_SPEC[[p]]$value
                         if (is_int_var(p)) val <- round(val)
                         updateNumericInput(session, paste0("param_", p), value = signif(val, 4))
                 }
@@ -2185,7 +2194,7 @@ server <- function(input, output, session) {
                 vals <- list()
                 for (p in preds) {
                         v <- input[[paste0("param_", p)]]
-                        if (is_toggled(p) && is.numeric(v) && length(v) == 1 && is.finite(v)) vals[[p]] <- v
+                        if (is_toggled(p) && is.numeric(v) && length(v) == 1 && is.finite(v)) vals[[p]] <- to_model(v, p)
                 }
                 vals
         }
@@ -2311,7 +2320,7 @@ server <- function(input, output, session) {
                                     sprintf(" %d imputed via %s", length(res$inputs$imputed), method_label),
                                     if (!is.null(eff)) sprintf(" \u00b7 plausible range in brackets")),
                                 div(lapply(res$inputs$imputed, function(v) {
-                                        val <- res$inputs$row[[v]]
+                                        val <- to_display(res$inputs$row[[v]], v)
                                         rng <- if (!is.null(eff)) eff[var == v] else NULL
                                         span(class = "imputed-var", sprintf("%s = %s", spec_label(v), fmt_in(val)),
                                              if (!is.null(rng) && nrow(rng))
